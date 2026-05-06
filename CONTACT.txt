@@ -1,7 +1,7 @@
-Full Name: Rajasurya
-Email: founders@turocrates.ai
-Phone: TODO
-GitHub: TODO
+Full Name: Bhuvanesh M S
+Email: bhuvaneshms60@gmail.com
+Phone: +91 9345656705
+GitHub: https://github.com/Bhuvanesh66/
 
 Most challenging part: Reworking five separate role dashboards onto a single shared
 component library while keeping the timezone-aware session activation window correct
