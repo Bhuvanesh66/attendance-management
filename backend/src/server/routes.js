@@ -72,7 +72,11 @@ function registerRoutes(app) {
     if (maybeUpdated?.role === "Trainer") {
       maybeUpdated = await ensureTrainerHasInstitution({ db, user: maybeUpdated });
     }
-    res.json({ user: maybeUpdated });
+    let institution = null;
+    if (maybeUpdated?.institution_id) {
+      institution = await db.institutions.getById(maybeUpdated.institution_id);
+    }
+    res.json({ user: maybeUpdated, institution });
   });
 
   if (process.env.NODE_ENV !== "production") {
@@ -119,6 +123,51 @@ function registerRoutes(app) {
     res.json({ user });
   });
 
+  // POST /institutions (Institution role) — Institution sets up their organisation explicitly.
+  app.post(
+    "/institutions",
+    authMiddleware,
+    requireRole(["Institution"]),
+    async (req, res) => {
+      const schema = z.object({
+        name: z.string().trim().min(2, "Name is too short").max(200),
+      });
+      const input = schema.parse(req.body || {});
+
+      if (req.user.institution_id) {
+        const existing = await db.institutions.getById(req.user.institution_id);
+        return res.status(200).json({ institution: existing, user: req.user });
+      }
+
+      const inst = await db.institutions.create({ name: input.name });
+      const user = await db.users.setInstitutionId(req.user.id, inst.id);
+
+      res.status(201).json({ institution: inst, user });
+    }
+  );
+
+  // PATCH /institutions/:id (Institution role) — rename own organisation.
+  app.patch(
+    "/institutions/:id",
+    authMiddleware,
+    requireRole(["Institution"]),
+    async (req, res) => {
+      const params = z.object({ id: Uuid }).parse(req.params);
+      const body = z
+        .object({ name: z.string().trim().min(2).max(200) })
+        .parse(req.body || {});
+
+      if (!req.user.institution_id) throw httpError(403, "No institution set up yet");
+      if (String(req.user.institution_id) !== String(params.id)) {
+        throw httpError(403, "Forbidden");
+      }
+
+      const inst = await db.institutions.rename(params.id, body.name);
+      if (!inst) throw httpError(404, "Institution not found");
+      res.json({ institution: inst });
+    }
+  );
+
   // ---- Core assignment endpoints ----
 
   // POST /batches (Trainer / Institution)
@@ -141,8 +190,18 @@ function registerRoutes(app) {
         institutionId = req.user.institution_id;
       } else {
         req.user = await ensureTrainerHasInstitution({ db, user: req.user });
-        institutionId = req.user.institution_id;
+        institutionId = input.institutionId || req.user.institution_id;
       }
+
+      if (!institutionId) {
+        throw httpError(
+          403,
+          "Institution required — every batch must belong to an organisation."
+        );
+      }
+
+      const inst = await db.institutions.getById(institutionId);
+      if (!inst) throw httpError(400, "Institution not found");
 
       const batch = await db.batches.create({ name: input.name, institutionId });
 
@@ -154,7 +213,7 @@ function registerRoutes(app) {
         );
       }
 
-      const payload = { batch };
+      const payload = { batch, institution: inst };
       if (req.user.role === "Trainer") payload.profile = req.user;
       res.status(201).json(payload);
     }
