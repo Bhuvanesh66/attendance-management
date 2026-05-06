@@ -5,4 +5,5 @@ GitHub: https://github.com/Bhuvanesh66/
 
 Most challenging part: Reworking five separate role dashboards onto a single shared
 component library while keeping the timezone-aware session activation window correct
-across both backend validation and the student's "mark attendance" UI.
+across both backend validation and the fixing the cors error and third party clerk DB integration.
+
