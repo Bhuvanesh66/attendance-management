@@ -1,381 +1,400 @@
 import { useAuth } from "@clerk/clerk-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../../lib/api";
 import { formatApiError } from "../../lib/errors.js";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  Input,
+  Modal,
+  PageHeader,
+  RoleBadge,
+  Select,
+  StatCard,
+  StatGrid,
+  StatusBadge,
+  Tabs,
+  useToast,
+} from "../../components/ui/index.js";
+
+const TZ_OFFSET_MIN = 330;
+
+function getSessionState(session) {
+  const dateStr = String(session?.date || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return { state: "ended", start: null, end: null };
+  const norm = (t) => {
+    const s = String(t || "");
+    if (s.length === 5 && s[2] === ":") return `${s}:00`;
+    return s || "00:00:00";
+  };
+  const parts = (t) => {
+    const [hh, mm, ss] = norm(t).split(":").map((x) => Number(x || 0));
+    const [y, m, d] = dateStr.split("-").map((x) => Number(x));
+    return new Date(Date.UTC(y, m - 1, d, hh, mm, ss) - TZ_OFFSET_MIN * 60_000);
+  };
+  const start = parts(session.start_time);
+  const end = parts(session.end_time);
+  const now = new Date();
+  if (now < start) return { state: "upcoming", start, end };
+  if (now > end) return { state: "ended", start, end };
+  return { state: "active", start, end };
+}
+
+function formatRelative(d) {
+  if (!d) return "";
+  const ms = d.getTime() - Date.now();
+  const abs = Math.abs(ms);
+  const min = Math.round(abs / 60_000);
+  if (min < 1) return "now";
+  const hr = Math.round(min / 60);
+  const day = Math.round(hr / 24);
+  let label;
+  if (min < 60) label = `${min} min`;
+  else if (hr < 24) label = `${hr}h`;
+  else label = `${day}d`;
+  return ms > 0 ? `in ${label}` : `${label} ago`;
+}
+
+function normalizeInviteToken(value) {
+  const v = String(value || "").trim();
+  if (!v) return "";
+  try {
+    if (v.startsWith("http://") || v.startsWith("https://")) {
+      const u = new URL(v);
+      return (u.searchParams.get("token") || "").trim();
+    }
+  } catch {
+    // ignore
+  }
+  if (v.includes("token=")) {
+    const after = v.split("token=").pop();
+    return String(after || "").split(/[&\s]/)[0].trim();
+  }
+  return v;
+}
+
+function inferBatchIdFromToken(value) {
+  const v = String(value || "").trim();
+  if (!v.startsWith("http")) return "";
+  try {
+    const u = new URL(v);
+    const fromQuery = u.searchParams.get("batchId") || u.searchParams.get("batch") || "";
+    if (fromQuery) return fromQuery;
+    const m = u.pathname.match(/batches\/([0-9a-f-]{36})/i);
+    if (m) return m[1];
+  } catch {
+    // ignore
+  }
+  return "";
+}
 
 export function StudentDashboard() {
   const { getToken } = useAuth();
-  const [batchId, setBatchId] = useState("");
-  const [tokenValue, setTokenValue] = useState("");
-  const [sessionId, setSessionId] = useState("");
-  const [status, setStatus] = useState("present");
-  const [mySessions, setMySessions] = useState([]);
-  const [error, setError] = useState(null);
+  const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTab] = useState("sessions");
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [batchId, setBatchId] = useState(searchParams.get("join") || "");
+  const [tokenValue, setTokenValue] = useState(searchParams.get("token") || "");
   const [busy, setBusy] = useState(false);
 
-  function getProgrammeWindow(session) {
-    const offsetMin = 330; // keep in sync with backend default
-    const dateStr = String(session?.date || "").slice(0, 10);
-    const normTime = (t) => {
-      const s = String(t || "");
-      if (s.length === 5 && s[2] === ":") return `${s}:00`;
-      return s || "00:00:00";
-    };
-    const parseParts = (isoDate, timeStr) => {
-      const [y, m, d] = isoDate.split("-").map((x) => Number(x));
-      const [hh, mm, ss] = String(timeStr).split(":").map((x) => Number(x || 0));
-      return { y, m, d, hh, mm, ss };
-    };
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
-    const startP = parseParts(dateStr, normTime(session?.start_time));
-    const endP = parseParts(dateStr, normTime(session?.end_time));
-    const toInstant = (p) =>
-      new Date(Date.UTC(p.y, p.m - 1, p.d, p.hh, p.mm, p.ss) - offsetMin * 60_000);
-    const start = toInstant(startP);
-    const end = toInstant(endP);
-    const now = new Date();
-    const state = now < start ? "upcoming" : now > end ? "ended" : "active";
-    return { start, end, now, state };
-  }
+  const [markFor, setMarkFor] = useState(null);
+  const [markStatus, setMarkStatus] = useState("present");
 
-  async function refreshMySessions() {
+  const refreshSessions = useCallback(async () => {
+    setLoading(true);
     try {
       const token = await getToken();
       const data = await apiFetch("/my/sessions", { token });
-      setMySessions(data.sessions || []);
-    } catch {
-      setMySessions([]);
+      setSessions(data.sessions || []);
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setLoading(false);
     }
-  }
+  }, [getToken, toast]);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!alive) return;
-      await refreshMySessions();
-    })();
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    refreshSessions();
+  }, [refreshSessions]);
 
-  function normalizeInviteToken(value) {
-    const v = String(value || "").trim();
-    if (!v) return "";
-    try {
-      if (v.startsWith("http://") || v.startsWith("https://")) {
-        const u = new URL(v);
-        return (u.searchParams.get("token") || "").trim();
-      }
-    } catch (_) {
-      // ignore and fall through
+  // Auto-switch to Join tab when arriving with ?join=&token=
+  useEffect(() => {
+    const join = searchParams.get("join");
+    const tok = searchParams.get("token");
+    if (join && tok) {
+      setTab("join");
+      setBatchId(join);
+      setTokenValue(tok);
     }
-    if (v.includes("token=")) {
-      const after = v.split("token=").pop();
-      return String(after || "").split(/[&\s]/)[0].trim();
-    }
-    return v;
-  }
+  }, [searchParams]);
 
-  async function joinBatch() {
+  async function joinBatch(e) {
+    e?.preventDefault?.();
     setBusy(true);
-    setError(null);
     try {
       const token = await getToken();
       const inviteToken = normalizeInviteToken(tokenValue);
-      await apiFetch(`/batches/${batchId.trim()}/join`, {
+      const inferred = inferBatchIdFromToken(tokenValue);
+      const id = (inferred || batchId).trim();
+      if (!id) {
+        toast.error("Batch ID is required.");
+        setBusy(false);
+        return;
+      }
+      await apiFetch(`/batches/${id}/join`, {
         token,
         method: "POST",
         body: { token: inviteToken },
       });
-      await refreshMySessions();
-    } catch (e) {
-      setError(e);
+      toast.success("You've joined the batch.");
+      setBatchId("");
+      setTokenValue("");
+      // Clear the join query params
+      const next = new URLSearchParams(searchParams);
+      next.delete("join");
+      next.delete("token");
+      setSearchParams(next, { replace: true });
+      setTab("sessions");
+      await refreshSessions();
+    } catch (err) {
+      toast.error(formatApiError(err));
     } finally {
       setBusy(false);
     }
   }
 
-  async function markAttendance() {
+  async function markAttendance(session, status) {
     setBusy(true);
-    setError(null);
     try {
       const token = await getToken();
       await apiFetch("/attendance/mark", {
         token,
         method: "POST",
-        body: { sessionId: sessionId.trim(), status },
+        body: { sessionId: String(session.id), status },
       });
-    } catch (e) {
-      setError(e);
+      toast.success(`Attendance recorded as ${status}.`);
+      setMarkFor(null);
+    } catch (err) {
+      toast.error(formatApiError(err));
     } finally {
       setBusy(false);
     }
   }
 
+  // Group sessions by state
+  const grouped = useMemo(() => {
+    const out = { active: [], upcoming: [], ended: [] };
+    for (const s of sessions) {
+      const w = getSessionState(s);
+      out[w.state]?.push({ ...s, _state: w.state, _start: w.start, _end: w.end });
+    }
+    return out;
+  }, [sessions]);
+
+  const tabs = [
+    {
+      key: "sessions",
+      label: "Sessions",
+      icon: "🗓️",
+      badge: sessions.length || undefined,
+    },
+    { key: "join", label: "Join a batch", icon: "🎟️" },
+  ];
+
   return (
-    <div className="sb-dashboard-grid">
-      <div>
-        <h1 className="sb-section-title" style={{ fontSize: "1.5rem", margin: "0 0 0.25rem" }}>
-          Student
-        </h1>
-        <p className="sb-muted" style={{ margin: 0 }}>
-          Join a batch with your invite, then mark attendance when a session is in its time window.
-        </p>
-      </div>
+    <div className="ui-stack ui-stack--lg">
+      <PageHeader
+        eyebrow="Student workspace"
+        title="Your sessions"
+        subtitle="See sessions for the batches you've joined and mark your attendance during the session window."
+        actions={
+          <>
+            <Button variant="secondary" onClick={refreshSessions} loading={loading}>
+              Refresh
+            </Button>
+            <Button onClick={() => setTab("join")}>Join a batch</Button>
+          </>
+        }
+        badge={<RoleBadge role="Student" />}
+      />
 
-      <div className="sb-card">
-        <h2 className="sb-section-title">What your trainer sends you</h2>
-        <ul className="sb-muted" style={{ margin: 0, paddingLeft: "1.25rem" }}>
-          <li>
-            <strong>Batch id</strong> — a UUID like{" "}
-            <code>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</code>
-          </li>
-          <li>
-            <strong>Invite token</strong> — a long hex string (not your Clerk login password)
-          </li>
-        </ul>
-      </div>
+      <StatGrid min={150}>
+        <StatCard label="Total sessions" value={sessions.length} icon="🗓️" tone="info" />
+        <StatCard label="Live now" value={grouped.active.length} icon="🟢" tone="success" />
+        <StatCard label="Upcoming" value={grouped.upcoming.length} icon="⏳" tone="warning" />
+        <StatCard label="Past" value={grouped.ended.length} icon="📁" tone="neutral" />
+      </StatGrid>
 
-      <div className="sb-card">
-        <h2 className="sb-section-title">Join a batch</h2>
-        <p className="sb-muted">Paste both values exactly; trailing spaces break validation.</p>
-        <div className="sb-dashboard-grid" style={{ marginTop: "0.5rem" }}>
-          <label className="sb-field">
-            <span>Batch id (UUID)</span>
-            <input
-              className="sb-input"
-              value={batchId}
-              onChange={(e) => setBatchId(e.target.value)}
-              placeholder="e.g. 8b2c1b2d-…"
-            />
-          </label>
-          <label className="sb-field">
-            <span>Invite token</span>
-            <input
-              className="sb-input"
-              value={tokenValue}
-              onChange={(e) => setTokenValue(e.target.value)}
-              placeholder="Long hex string from your trainer"
-            />
-          </label>
-          <button
-            type="button"
-            className="sb-btn sb-btn-primary"
-            style={{ width: "fit-content" }}
-            disabled={busy || !batchId.trim() || !tokenValue}
-            onClick={joinBatch}
-          >
-            Join batch
-          </button>
-        </div>
-      </div>
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
-      <div className="sb-card">
-        <h2 className="sb-section-title">Mark attendance</h2>
-        <p className="sb-muted">Only works during the session’s scheduled start and end time.</p>
-        <div className="sb-dashboard-grid" style={{ marginTop: "0.5rem" }}>
-          <label className="sb-field">
-            <span>Session id (UUID)</span>
-            <input
-              className="sb-input"
-              value={sessionId}
-              onChange={(e) => setSessionId(e.target.value)}
-              placeholder="From your schedule or trainer"
-            />
-          </label>
-          <label className="sb-field">
-            <span>Status</span>
-            <select className="sb-select" value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="present">Present</option>
-              <option value="absent">Absent</option>
-              <option value="late">Late</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="sb-btn sb-btn-primary"
-            style={{ width: "fit-content" }}
-            disabled={busy || !sessionId.trim()}
-            onClick={markAttendance}
-          >
-            Mark attendance
-          </button>
-        </div>
-      </div>
-
-      <div className="sb-card">
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "1rem" }}>
-          <h2 className="sb-section-title" style={{ margin: 0 }}>
-            My sessions
-          </h2>
-          <button
-            type="button"
-            className="sb-btn"
-            style={{ width: "fit-content" }}
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError(null);
-              try {
-                await refreshMySessions();
-              } catch (e) {
-                setError(e);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            Refresh
-          </button>
-        </div>
-
-        <p className="sb-muted" style={{ marginTop: "0.5rem" }}>
-          After you join a batch, sessions scheduled for that batch will appear here. Click one to auto-fill the Session id.
-        </p>
-
-        {mySessions.length === 0 ? (
-          <div className="sb-muted" style={{ fontSize: "0.9375rem" }}>
-            No sessions yet. If you just joined, ask your trainer to create a session for that batch.
-          </div>
-        ) : (
-          <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
-            {mySessions.map((s) => (
-              (() => {
-                const w = getProgrammeWindow(s);
-                const badge =
-                  w?.state === "active"
-                    ? { label: "Active now", bg: "#dcfce7", border: "#bbf7d0", color: "#14532d" }
-                    : w?.state === "upcoming"
-                      ? { label: "Upcoming", bg: "#eff6ff", border: "#bfdbfe", color: "#1e3a8a" }
-                      : { label: "Ended", bg: "#f1f5f9", border: "#e2e8f0", color: "#334155" };
-                return (
-              <div
-                key={s.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: "0.75rem",
-                  padding: "0.65rem 0.75rem",
-                  borderRadius: "var(--sb-radius-sm)",
-                  border: "1px solid var(--sb-border)",
-                  background: sessionId === String(s.id) ? "#f0fdf4" : "#fff",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSessionId(String(s.id));
-                    setError(null);
-                  }}
-                  style={{
-                    textAlign: "left",
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    padding: 0,
-                    font: "inherit",
-                  }}
-                >
-                  <div style={{ fontWeight: 600 }}>{s.title || "Session"}</div>
-                  <div className="sb-muted" style={{ fontSize: "0.8125rem" }}>
-                    {s.batch_name ? (
-                      <>
-                        <strong>Batch:</strong> {s.batch_name}{" "}
-                      </>
-                    ) : null}
-                    <span style={{ wordBreak: "break-all" }}>
-                      <strong>ID:</strong> {s.id}
-                    </span>
-                  </div>
-                  <div className="sb-muted" style={{ fontSize: "0.8125rem" }}>
-                    <strong>When:</strong> {s.date} {String(s.start_time || "").slice(0, 5)}–{String(s.end_time || "").slice(0, 5)}
-                  </div>
-                </button>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", alignItems: "flex-end" }}>
-                  <span
-                    style={{
-                      fontSize: "0.75rem",
-                      padding: "0.2rem 0.5rem",
-                      borderRadius: 999,
-                      background: badge.bg,
-                      border: `1px solid ${badge.border}`,
-                      color: badge.color,
-                      fontWeight: 600,
-                      alignSelf: "flex-end",
-                    }}
-                  >
-                    {badge.label}
-                  </span>
-                  <button
-                    type="button"
-                    className="sb-btn"
-                    style={{ width: "fit-content" }}
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(String(s.id));
-                      } catch {
-                        // ignore clipboard failure (e.g. insecure context)
-                      }
-                    }}
-                  >
-                    Copy ID
-                  </button>
-                  <button
-                    type="button"
-                    className="sb-btn sb-btn-primary"
-                    style={{ width: "fit-content" }}
-                    onClick={() => {
-                      setSessionId(String(s.id));
-                      setError(null);
-                    }}
-                  >
-                    Use
-                  </button>
-                  <button
-                    type="button"
-                    className="sb-btn sb-btn-primary"
-                    style={{ width: "fit-content" }}
-                    disabled={busy || w?.state !== "active"}
-                    onClick={async () => {
-                      setBusy(true);
-                      setError(null);
-                      try {
-                        const token = await getToken();
-                        await apiFetch("/attendance/mark", {
-                          token,
-                          method: "POST",
-                          body: { sessionId: String(s.id), status },
-                        });
-                      } catch (e) {
-                        setError(e);
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  >
-                    Mark ({status})
-                  </button>
-                </div>
+      {tab === "sessions" ? (
+        <div className="ui-stack ui-stack--lg">
+          <Card title="Live now" subtitle="You can mark attendance for these sessions right now." icon="🟢">
+            {grouped.active.length === 0 ? (
+              <EmptyState
+                title="No sessions are live"
+                hint="When a session reaches its scheduled start time, it'll show up here."
+                icon="⏰"
+              />
+            ) : (
+              <div className="ui-stack ui-stack--sm">
+                {grouped.active.map((s) => (
+                  <SessionCard key={s.id} session={s} onMark={() => setMarkFor(s)} />
+                ))}
               </div>
-                );
-              })()
-            ))}
-          </div>
-        )}
-      </div>
+            )}
+          </Card>
 
-      {error ? (
-        <div
-          className="sb-error-card"
-          style={{ background: "#fef2f2", maxWidth: "100%", margin: 0 }}
-        >
-          <h2 style={{ fontSize: "1rem" }}>Something went wrong</h2>
-          <p style={{ margin: 0 }}>{formatApiError(error)}</p>
+          {grouped.upcoming.length > 0 ? (
+            <Card title="Upcoming" subtitle="Sessions scheduled for the future." icon="⏳">
+              <div className="ui-stack ui-stack--sm">
+                {grouped.upcoming.map((s) => (
+                  <SessionCard key={s.id} session={s} disabledReason="Mark opens at start time" />
+                ))}
+              </div>
+            </Card>
+          ) : null}
+
+          {grouped.ended.length > 0 ? (
+            <Card title="Past sessions" subtitle="Sessions you can no longer mark." icon="📁">
+              <div className="ui-stack ui-stack--sm">
+                {grouped.ended.map((s) => (
+                  <SessionCard key={s.id} session={s} disabledReason="Window closed" />
+                ))}
+              </div>
+            </Card>
+          ) : null}
+
+          {sessions.length === 0 ? (
+            <Card>
+              <EmptyState
+                title="No sessions yet"
+                hint="Join a batch using the link or token your trainer shared."
+                icon="🎟️"
+                action={<Button onClick={() => setTab("join")}>Join a batch</Button>}
+              />
+            </Card>
+          ) : null}
         </div>
       ) : null}
+
+      {tab === "join" ? (
+        <Card
+          title="Join a batch"
+          subtitle="Paste the join link from your trainer, or enter the batch ID and token separately."
+          icon="🎟️"
+        >
+          <form onSubmit={joinBatch} className="ui-stack">
+            <Field
+              label="Join link or invite token"
+              hint="Trainer-shared full URL works too — we'll auto-detect the batch ID and token."
+              required
+            >
+              <Input
+                value={tokenValue}
+                onChange={(e) => {
+                  setTokenValue(e.target.value);
+                  const inferred = inferBatchIdFromToken(e.target.value);
+                  if (inferred && !batchId) setBatchId(inferred);
+                }}
+                placeholder="https://… or a long hex token"
+              />
+            </Field>
+            <Field
+              label="Batch ID"
+              hint="Optional if you pasted a full join link above."
+            >
+              <Input
+                value={batchId}
+                onChange={(e) => setBatchId(e.target.value)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              />
+            </Field>
+            <div className="ui-form-actions">
+              <Button type="submit" loading={busy} disabled={!tokenValue.trim()}>
+                Join batch
+              </Button>
+            </div>
+          </form>
+        </Card>
+      ) : null}
+
+      {/* Mark attendance modal */}
+      <Modal
+        open={!!markFor}
+        title={markFor ? `Mark attendance — ${markFor.title}` : "Mark attendance"}
+        onClose={() => setMarkFor(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setMarkFor(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => markFor && markAttendance(markFor, markStatus)} loading={busy}>
+              Mark as {markStatus}
+            </Button>
+          </>
+        }
+      >
+        {markFor ? (
+          <div className="ui-stack">
+            <div>
+              <div style={{ fontWeight: 600 }}>{markFor.title}</div>
+              <span className="ui-muted" style={{ fontSize: "0.85rem" }}>
+                Batch: {markFor.batch_name || "—"} · {String(markFor.date).slice(0, 10)}{" "}
+                {String(markFor.start_time || "").slice(0, 5)}–{String(markFor.end_time || "").slice(0, 5)}
+              </span>
+            </div>
+            <Field label="Status">
+              <Select value={markStatus} onChange={(e) => setMarkStatus(e.target.value)}>
+                <option value="present">Present</option>
+                <option value="late">Late</option>
+                <option value="absent">Absent</option>
+              </Select>
+            </Field>
+          </div>
+        ) : null}
+      </Modal>
+    </div>
+  );
+}
+
+function SessionCard({ session, onMark, disabledReason }) {
+  const w = getSessionState(session);
+  const isActive = w.state === "active";
+  const dateStr = String(session?.date || "").slice(0, 10);
+  return (
+    <div className={`ui-session-card ${isActive ? "ui-session-card--active" : ""}`}>
+      <div className="ui-row ui-row--between" style={{ alignItems: "flex-start" }}>
+        <div>
+          <div className="ui-session-card__title">{session.title || "Session"}</div>
+          <div className="ui-session-card__meta">
+            <span><strong>Batch:</strong> {session.batch_name || "—"}</span>
+            <span><strong>When:</strong> {dateStr} {String(session.start_time || "").slice(0, 5)}–{String(session.end_time || "").slice(0, 5)}</span>
+          </div>
+        </div>
+        <StatusBadge status={w.state} />
+      </div>
+      <div className="ui-session-card__footer">
+        <span className="ui-muted" style={{ fontSize: "0.8rem" }}>
+          {w.state === "active" && w.end ? `Ends ${formatRelative(w.end)}` : null}
+          {w.state === "upcoming" && w.start ? `Starts ${formatRelative(w.start)}` : null}
+          {w.state === "ended" && w.end ? `Ended ${formatRelative(w.end)}` : null}
+        </span>
+        {onMark ? (
+          <Button size="sm" onClick={onMark}>
+            Mark attendance
+          </Button>
+        ) : disabledReason ? (
+          <Badge tone="neutral">{disabledReason}</Badge>
+        ) : null}
+      </div>
     </div>
   );
 }

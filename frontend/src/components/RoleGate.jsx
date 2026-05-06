@@ -48,7 +48,7 @@ function describeProfileError(err) {
 /** Loads `/me` once, then either completes signup routing or shows the role dashboard. */
 export function RoleGate() {
   const { getToken } = useAuth();
-  const [state, setState] = useState({ loading: true, user: null, error: null });
+  const [state, setState] = useState({ loading: true, user: null, institution: null, error: null });
 
   useEffect(() => {
     let alive = true;
@@ -57,10 +57,10 @@ export function RoleGate() {
         const token = await getToken();
         const data = await apiFetch("/me", { token });
         if (!alive) return;
-        setState({ loading: false, user: data.user, error: null });
+        setState({ loading: false, user: data.user, institution: data.institution || null, error: null });
       } catch (e) {
         if (!alive) return;
-        setState({ loading: false, user: null, error: e });
+        setState({ loading: false, user: null, institution: null, error: e });
       }
     })();
     return () => {
@@ -93,5 +93,5 @@ export function RoleGate() {
     return <Navigate to="/complete-signup" replace />;
   }
 
-  return <DashboardRouter user={state.user} />;
+  return <DashboardRouter user={state.user} institution={state.institution} />;
 }

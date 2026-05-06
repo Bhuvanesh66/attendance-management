@@ -4,14 +4,14 @@ import { InstitutionDashboard } from "./dashboards/InstitutionDashboard.jsx";
 import { ProgrammeManagerDashboard } from "./dashboards/ProgrammeManagerDashboard.jsx";
 import { MonitoringOfficerDashboard } from "./dashboards/MonitoringOfficerDashboard.jsx";
 
-export function DashboardRouter({ user }) {
+export function DashboardRouter({ user, institution }) {
   switch (user.role) {
     case "Student":
       return <StudentDashboard />;
     case "Trainer":
-      return <TrainerDashboard profile={user} />;
+      return <TrainerDashboard profile={user} institution={institution} />;
     case "Institution":
-      return <InstitutionDashboard profile={user} />;
+      return <InstitutionDashboard profile={user} institution={institution} />;
     case "ProgrammeManager":
       return <ProgrammeManagerDashboard />;
     case "MonitoringOfficer":

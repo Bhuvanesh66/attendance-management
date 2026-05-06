@@ -1,228 +1,277 @@
 import { useAuth } from "@clerk/clerk-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../lib/api";
 import { formatApiError } from "../../lib/errors.js";
+import {
+  Badge,
+  Button,
+  Card,
+  CopyableId,
+  EmptyState,
+  Modal,
+  PageHeader,
+  RoleBadge,
+  StatCard,
+  StatGrid,
+  Table,
+  Tabs,
+  useToast,
+} from "../../components/ui/index.js";
 
-function Stat({ label, value }) {
-  return (
-    <div
-      style={{
-        padding: "1rem",
-        borderRadius: "var(--sb-radius-sm)",
-        background: "#f8fafc",
-        border: "1px solid var(--sb-border)",
-      }}
-    >
-      <div className="sb-muted" style={{ fontSize: "0.75rem", fontWeight: 600, marginBottom: "0.25rem" }}>
-        {label}
+function AttendanceBar({ summary }) {
+  const present = Number(summary?.present_count || 0);
+  const late = Number(summary?.late_count || 0);
+  const absent = Number(summary?.absent_count || 0);
+  const total = present + late + absent;
+  if (total === 0) {
+    return (
+      <div className="ui-muted" style={{ fontSize: "0.85rem" }}>
+        No attendance recorded yet.
       </div>
-      <div style={{ fontSize: "1.5rem", fontWeight: 700, letterSpacing: "-0.02em" }}>{value}</div>
+    );
+  }
+  const pct = (n) => `${(n / total) * 100}%`;
+  return (
+    <div className="ui-stack ui-stack--sm">
+      <div className="ui-bar">
+        {present > 0 ? <div className="ui-bar__seg ui-bar__seg--present" style={{ width: pct(present) }} /> : null}
+        {late > 0 ? <div className="ui-bar__seg ui-bar__seg--late" style={{ width: pct(late) }} /> : null}
+        {absent > 0 ? <div className="ui-bar__seg ui-bar__seg--absent" style={{ width: pct(absent) }} /> : null}
+      </div>
+      <div className="ui-bar__legend">
+        <span className="ui-bar__legend-item">
+          <span className="ui-bar__legend-swatch" style={{ background: "#10b981" }} /> Present {present}
+        </span>
+        <span className="ui-bar__legend-item">
+          <span className="ui-bar__legend-swatch" style={{ background: "#f59e0b" }} /> Late {late}
+        </span>
+        <span className="ui-bar__legend-item">
+          <span className="ui-bar__legend-swatch" style={{ background: "#ef4444" }} /> Absent {absent}
+        </span>
+      </div>
     </div>
   );
 }
 
-export function ProgrammeManagerDashboard() {
+export function ProgrammeManagerDashboard({ readOnly = false }) {
   const { getToken } = useAuth();
-  const [state, setState] = useState({ loading: true, summary: null, error: null });
+  const toast = useToast();
+  const [tab, setTab] = useState("overview");
+  const [summary, setSummary] = useState(null);
   const [institutions, setInstitutions] = useState([]);
-  const [institutionId, setInstitutionId] = useState("");
-  const [instState, setInstState] = useState({ loading: false, summary: null, error: null });
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const token = await getToken();
-        const data = await apiFetch("/programme/summary", { token });
-        if (!alive) return;
-        setState({ loading: false, summary: data.summary, error: null });
-      } catch (e) {
-        if (!alive) return;
-        setState({ loading: false, summary: null, error: e });
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [getToken]);
+  const [drilldown, setDrilldown] = useState(null);
+  const [drilldownState, setDrilldownState] = useState({ loading: false, data: null });
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const token = await getToken();
-        const data = await apiFetch("/institutions", { token });
-        if (!alive) return;
-        setInstitutions(data.institutions || []);
-      } catch {
-        if (!alive) return;
-        setInstitutions([]);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [getToken]);
-
-  async function loadInstitutionSummary() {
-    setInstState({ loading: true, summary: null, error: null });
+  const refreshAll = useCallback(async () => {
+    setLoading(true);
     try {
       const token = await getToken();
-      const id = institutionId.trim();
-      const data = await apiFetch(`/institutions/${id}/summary`, { token });
-      setInstState({ loading: false, summary: data.summary, error: null });
+      const [s, i] = await Promise.all([
+        apiFetch("/programme/summary", { token }),
+        apiFetch("/institutions", { token }),
+      ]);
+      setSummary(s.summary);
+      setInstitutions(i.institutions || []);
     } catch (e) {
-      setInstState({ loading: false, summary: null, error: e });
+      toast.error(formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [getToken, toast]);
+
+  useEffect(() => {
+    refreshAll();
+  }, [refreshAll]);
+
+  async function openDrilldown(inst) {
+    setDrilldown(inst);
+    if (readOnly) {
+      // Monitoring Officer can't access /institutions/:id/summary; just show the row.
+      setDrilldownState({ loading: false, data: null });
+      return;
+    }
+    setDrilldownState({ loading: true, data: null });
+    try {
+      const token = await getToken();
+      const data = await apiFetch(`/institutions/${inst.id}/summary`, { token });
+      setDrilldownState({ loading: false, data });
+    } catch (err) {
+      setDrilldownState({ loading: false, data: null });
+      toast.error(formatApiError(err));
     }
   }
 
-  const s = state.summary;
+  const attendanceRate = useMemo(() => {
+    if (!summary) return null;
+    const total = Number(summary.total_marks || 0);
+    if (total === 0) return null;
+    return Math.round((Number(summary.present_count || 0) / total) * 100);
+  }, [summary]);
+
+  const tabs = [
+    { key: "overview", label: "Programme overview", icon: "📊" },
+    {
+      key: "institutions",
+      label: "Institutions",
+      icon: "🏢",
+      badge: institutions.length || undefined,
+    },
+  ];
+
+  const role = readOnly ? "MonitoringOfficer" : "ProgrammeManager";
+  const roleTitle = readOnly ? "Monitoring Officer" : "Programme Manager";
 
   return (
-    <div className="sb-dashboard-grid">
-      <div>
-        <h1 className="sb-section-title" style={{ fontSize: "1.5rem", margin: "0 0 0.25rem" }}>
-          Programme manager
-        </h1>
-        <p className="sb-muted" style={{ margin: 0 }}>Cross-institution programme overview.</p>
-      </div>
+    <div className="ui-stack ui-stack--lg">
+      <PageHeader
+        eyebrow={`${roleTitle} workspace`}
+        title="Programme overview"
+        subtitle={
+          readOnly
+            ? "Read-only view of attendance across every institution in the programme."
+            : "Cross-institution attendance summary for your region."
+        }
+        actions={
+          <Button variant="secondary" onClick={refreshAll} loading={loading}>
+            Refresh
+          </Button>
+        }
+        badge={<RoleBadge role={role} />}
+      />
 
-      <div className="sb-card">
-        <p className="sb-muted" style={{ margin: 0 }}>
-          This page calls <code>/programme/summary</code> and shows totals across the whole demo dataset.
-          There is nothing to configure here — open it anytime you want programme-wide stats.
-        </p>
-      </div>
-
-      {state.loading ? (
-        <div className="sb-loading-screen" style={{ minHeight: 120 }}>
-          <div className="sb-spinner" aria-hidden />
-          <p className="sb-muted" style={{ margin: 0 }}>
-            Loading programme stats…
-          </p>
+      {readOnly ? (
+        <div className="ui-readonly-banner">
+          <span className="ui-readonly-banner__icon">🔒</span>
+          You have read-only access. No create, edit, or delete actions are available.
         </div>
       ) : null}
 
-      {state.error ? (
-        <div className="sb-error-card" style={{ maxWidth: "100%", margin: 0 }}>
-          <h2 style={{ fontSize: "1rem" }}>Could not load summary</h2>
-          <p style={{ margin: 0 }}>{formatApiError(state.error)}</p>
-        </div>
-      ) : null}
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
-      {s ? (
-        <>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: "0.75rem",
-            }}
-          >
-            <Stat label="Institutions" value={s.total_institutions ?? "—"} />
-            <Stat label="Batches" value={s.total_batches ?? "—"} />
-            <Stat label="Sessions" value={s.total_sessions ?? "—"} />
-            <Stat label="Students" value={s.total_students ?? "—"} />
-            <Stat label="Marks" value={s.total_marks ?? "—"} />
-            <Stat label="Present" value={s.present_count ?? "—"} />
-            <Stat label="Absent" value={s.absent_count ?? "—"} />
-            <Stat label="Late" value={s.late_count ?? "—"} />
-          </div>
-          <details className="sb-card" style={{ cursor: "pointer" }}>
-            <summary style={{ fontWeight: 600 }}>Raw JSON</summary>
-            <pre
-              style={{
-                marginTop: "1rem",
-                marginBottom: 0,
-                fontSize: "0.8125rem",
-                overflow: "auto",
-              }}
-            >
-              {JSON.stringify(s, null, 2)}
-            </pre>
-          </details>
-        </>
-      ) : null}
-
-      <div className="sb-card">
-        <h2 className="sb-section-title">Institution summary</h2>
-        <p className="sb-muted">
-          Pick an institution to see its batch/session/student/attendance totals (calls <code>/institutions/:id/summary</code>).
-        </p>
-
-        {institutions.length > 0 ? (
-          <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
-            {institutions.slice(0, 8).map((i) => (
-              <button
-                key={i.id}
-                type="button"
-                onClick={() => {
-                  setInstitutionId(String(i.id));
-                  setInstState({ loading: false, summary: null, error: null });
-                }}
-                style={{
-                  textAlign: "left",
-                  padding: "0.65rem 0.75rem",
-                  borderRadius: "var(--sb-radius-sm)",
-                  border: "1px solid var(--sb-border)",
-                  background: institutionId === String(i.id) ? "#eef2ff" : "#fff",
-                  cursor: "pointer",
-                  font: "inherit",
-                }}
-              >
-                <div style={{ fontWeight: 600 }}>{i.name}</div>
-                <div style={{ fontSize: "0.75rem", opacity: 0.85, wordBreak: "break-all" }}>{i.id}</div>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="sb-muted" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-            No institutions found yet.
-          </p>
-        )}
-
-        <div className="sb-dashboard-grid" style={{ marginTop: "0.75rem" }}>
-          <label className="sb-field">
-            <span>Institution id (UUID)</span>
-            <input
-              className="sb-input"
-              value={institutionId}
-              onChange={(e) => setInstitutionId(e.target.value)}
-              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      {tab === "overview" ? (
+        <div className="ui-stack ui-stack--lg">
+          <StatGrid min={150}>
+            <StatCard label="Institutions" value={summary?.total_institutions ?? 0} icon="🏢" tone="info" />
+            <StatCard label="Batches" value={summary?.total_batches ?? 0} icon="📚" tone="neutral" />
+            <StatCard label="Sessions" value={summary?.total_sessions ?? 0} icon="🗓️" tone="neutral" />
+            <StatCard label="Students" value={summary?.total_students ?? 0} icon="👨‍🎓" tone="info" />
+            <StatCard
+              label="Attendance rate"
+              value={attendanceRate == null ? "—" : `${attendanceRate}%`}
+              hint={attendanceRate == null ? "No marks yet" : "Present ÷ total marks"}
+              icon="📈"
+              tone="success"
             />
-          </label>
-          <button
-            type="button"
-            className="sb-btn sb-btn-primary"
-            style={{ width: "fit-content" }}
-            disabled={!institutionId.trim() || instState.loading}
-            onClick={loadInstitutionSummary}
-          >
-            {instState.loading ? "Loading…" : "Load institution summary"}
-          </button>
+            <StatCard label="Present" value={summary?.present_count ?? 0} icon="✅" tone="success" />
+            <StatCard label="Late" value={summary?.late_count ?? 0} icon="⏰" tone="warning" />
+            <StatCard label="Absent" value={summary?.absent_count ?? 0} icon="❌" tone="danger" />
+          </StatGrid>
+
+          <Card title="Attendance breakdown" subtitle="All marks across the entire programme.">
+            <AttendanceBar summary={summary} />
+          </Card>
         </div>
+      ) : null}
 
-        {instState.error ? (
-          <p style={{ color: "var(--sb-danger)", marginTop: "1rem", marginBottom: 0 }}>{formatApiError(instState.error)}</p>
-        ) : null}
+      {tab === "institutions" ? (
+        <Card
+          title="Institutions in this programme"
+          subtitle={
+            readOnly
+              ? "Read-only list of institutions. Drill-down stats are available to Programme Managers."
+              : "Click an institution to see its attendance summary."
+          }
+        >
+          <Table
+            columns={[
+              {
+                key: "name",
+                label: "Institution",
+                render: (i) => (
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{i.name}</div>
+                    <CopyableId value={i.id} />
+                  </div>
+                ),
+              },
+              {
+                key: "created_at",
+                label: "Created",
+                render: (i) => (
+                  <span className="ui-muted">
+                    {i.created_at ? new Date(i.created_at).toLocaleDateString() : "—"}
+                  </span>
+                ),
+              },
+              ...(!readOnly
+                ? [
+                    {
+                      key: "actions",
+                      label: "",
+                      render: (i) => (
+                        <Button size="sm" variant="secondary" onClick={() => openDrilldown(i)}>
+                          View summary
+                        </Button>
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+            rows={institutions}
+            empty={
+              <EmptyState
+                title="No institutions registered"
+                hint="As soon as Institution-role users set up their organisation, they'll show up here."
+                icon="🏢"
+              />
+            }
+          />
+        </Card>
+      ) : null}
 
-        {instState.summary ? (
-          <pre
-            style={{
-              marginTop: "1rem",
-              marginBottom: 0,
-              padding: "1rem",
-              borderRadius: "var(--sb-radius-sm)",
-              background: "#f8fafc",
-              border: "1px solid var(--sb-border)",
-              overflow: "auto",
-              fontSize: "0.8125rem",
+      <Modal
+        open={!!drilldown}
+        title={drilldown ? `Summary — ${drilldown.name}` : "Institution summary"}
+        size="lg"
+        onClose={() => {
+          setDrilldown(null);
+          setDrilldownState({ loading: false, data: null });
+        }}
+        footer={
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setDrilldown(null);
+              setDrilldownState({ loading: false, data: null });
             }}
           >
-            {JSON.stringify(instState.summary, null, 2)}
-          </pre>
+            Close
+          </Button>
+        }
+      >
+        {drilldown ? (
+          drilldownState.loading ? (
+            <p className="ui-muted">Loading…</p>
+          ) : drilldownState.data ? (
+            <div className="ui-stack">
+              <StatGrid min={130}>
+                <StatCard label="Batches" value={drilldownState.data.summary?.total_batches} tone="info" />
+                <StatCard label="Sessions" value={drilldownState.data.summary?.total_sessions} tone="info" />
+                <StatCard label="Students" value={drilldownState.data.summary?.total_students} tone="neutral" />
+                <StatCard label="Marks" value={drilldownState.data.summary?.total_marks} tone="neutral" />
+                <StatCard label="Present" value={drilldownState.data.summary?.present_count} tone="success" />
+                <StatCard label="Late" value={drilldownState.data.summary?.late_count} tone="warning" />
+                <StatCard label="Absent" value={drilldownState.data.summary?.absent_count} tone="danger" />
+              </StatGrid>
+              <AttendanceBar summary={drilldownState.data.summary} />
+            </div>
+          ) : (
+            <p className="ui-muted">No data.</p>
+          )
         ) : null}
-      </div>
+      </Modal>
     </div>
   );
 }

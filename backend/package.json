@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "build": "node -e \"console.log('backend: no build step (node/express)')\"",
-    "migrate": "node src/db/migrate.js"
+    "migrate": "node src/db/migrate.js",
+    "seed": "node src/db/seed.js"
   },
   "dependencies": {
     "@clerk/clerk-sdk-node": "^5.1.6",

@@ -64,6 +64,17 @@ const users = {
     );
     return r.rows[0];
   },
+
+  async setInstitutionId(userId, institutionId) {
+    const r = await query(
+      `update users
+         set institution_id = $1
+       where id = $2
+       returning id, clerk_user_id, name, role, institution_id, created_at, email`,
+      [institutionId, userId]
+    );
+    return r.rows[0];
+  },
 };
 
 const institutions = {
@@ -80,6 +91,21 @@ const institutions = {
       id,
     ]);
     return r.rows[0] || null;
+  },
+
+  async rename(id, name) {
+    const r = await query(
+      "update institutions set name = $1 where id = $2 returning id, name, created_at",
+      [name, id]
+    );
+    return r.rows[0] || null;
+  },
+
+  async listAll() {
+    const r = await query(
+      "select id, name, created_at from institutions order by created_at desc"
+    );
+    return r.rows;
   },
 };
 

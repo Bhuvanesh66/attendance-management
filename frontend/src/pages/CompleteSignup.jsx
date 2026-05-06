@@ -1,30 +1,37 @@
 import { useAuth, useUser } from "@clerk/clerk-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { formatApiError } from "../lib/errors.js";
-import { useNavigate } from "react-router-dom";
+import {
+  Button,
+  Card,
+  Field,
+  Input,
+  PageHeader,
+  useToast,
+} from "../components/ui/index.js";
 
 const ROLES = [
-  { value: "Student", label: "Student", hint: "Join batches and mark attendance" },
-  { value: "Trainer", label: "Trainer", hint: "Create sessions and view marks" },
-  { value: "Institution", label: "Institution", hint: "Oversee batches at your org" },
-  { value: "ProgrammeManager", label: "Programme manager", hint: "Programme-wide summaries" },
-  { value: "MonitoringOfficer", label: "Monitoring officer", hint: "Cross-programme reporting" },
+  { value: "Student", label: "Student", hint: "Join batches and mark attendance for sessions you attend.", icon: "🎓" },
+  { value: "Trainer", label: "Trainer", hint: "Create batches, schedule sessions, and review attendance.", icon: "🧑‍🏫" },
+  { value: "Institution", label: "Institution", hint: "Set up your organisation and oversee its trainers and batches.", icon: "🏢" },
+  { value: "ProgrammeManager", label: "Programme Manager", hint: "Cross-institution attendance summaries for your region.", icon: "📊" },
+  { value: "MonitoringOfficer", label: "Monitoring Officer", hint: "Read-only programme-wide reporting.", icon: "🔍" },
 ];
 
 export function CompleteSignup() {
   const { user } = useUser();
   const { getToken } = useAuth();
   const nav = useNavigate();
+  const toast = useToast();
   const [role, setRole] = useState("Student");
   const [name, setName] = useState(user?.fullName || "");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
 
   async function onSubmit(e) {
     e.preventDefault();
     setSaving(true);
-    setError(null);
     try {
       const token = await getToken();
       await apiFetch("/auth/complete-signup", {
@@ -32,65 +39,77 @@ export function CompleteSignup() {
         method: "POST",
         body: { role, name },
       });
+      toast.success("Welcome! Loading your workspace…");
       nav("/app", { replace: true });
     } catch (err) {
-      setError(err);
+      toast.error(formatApiError(err));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="sb-card" style={{ maxWidth: 520, margin: "0 auto" }}>
-      <h2 className="sb-section-title">Finish setting up your account</h2>
-      <p className="sb-muted" style={{ margin: "0 0 1.25rem" }}>
-        Pick how you use SkillBridge. You can contact an admin later if your role needs to change.
-      </p>
+    <div style={{ maxWidth: 720, margin: "0 auto" }}>
+      <PageHeader
+        eyebrow="Almost there"
+        title="Pick your role"
+        subtitle="Choose how you'll use SkillBridge. Your role determines which dashboard and permissions you get."
+      />
 
-      <form onSubmit={onSubmit} className="sb-dashboard-grid">
-        <label className="sb-field">
-          <span>Display name</span>
-          <input
-            className="sb-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name"
-            autoComplete="name"
-          />
-        </label>
+      <form onSubmit={onSubmit}>
+        <Card>
+          <Field label="Display name" hint="Shown to trainers/institutions when relevant.">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your name"
+              autoComplete="name"
+            />
+          </Field>
 
-        <div className="sb-field">
-          <span>Role</span>
-          <select className="sb-select" value={role} onChange={(e) => setRole(e.target.value)}>
-            {ROLES.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-          <span className="sb-muted" style={{ fontSize: "0.8125rem", fontWeight: 400 }}>
-            {ROLES.find((x) => x.value === role)?.hint}
-          </span>
-        </div>
-
-        {error ? (
-          <div
-            style={{
-              padding: "0.75rem 1rem",
-              borderRadius: "var(--sb-radius-sm)",
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              color: "#991b1b",
-              fontSize: "0.9375rem",
-            }}
-          >
-            {formatApiError(error)}
+          <div className="ui-stack ui-stack--sm" style={{ marginTop: "1.25rem" }}>
+            <span className="ui-field__label">Role</span>
+            <div className="ui-stack ui-stack--sm" role="radiogroup">
+              {ROLES.map((r) => (
+                <label
+                  key={r.value}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr auto",
+                    gap: "0.85rem",
+                    alignItems: "center",
+                    padding: "0.85rem 1rem",
+                    border: `1.5px solid ${role === r.value ? "var(--sb-brand)" : "var(--sb-border)"}`,
+                    borderRadius: "var(--sb-radius)",
+                    background: role === r.value ? "var(--sb-brand-soft)" : "var(--sb-surface)",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <span style={{ fontSize: "1.5rem" }}>{r.icon}</span>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{r.label}</div>
+                    <div className="ui-muted" style={{ fontSize: "0.85rem" }}>{r.hint}</div>
+                  </div>
+                  <input
+                    type="radio"
+                    name="role"
+                    value={r.value}
+                    checked={role === r.value}
+                    onChange={(e) => setRole(e.target.value)}
+                    style={{ accentColor: "var(--sb-brand)" }}
+                  />
+                </label>
+              ))}
+            </div>
           </div>
-        ) : null}
 
-        <button type="submit" className="sb-btn sb-btn-primary" disabled={saving}>
-          {saving ? "Saving…" : "Continue to dashboard"}
-        </button>
+          <div className="ui-form-actions" style={{ marginTop: "1.25rem" }}>
+            <Button type="submit" loading={saving} disabled={!role}>
+              Continue to dashboard
+            </Button>
+          </div>
+        </Card>
       </form>
     </div>
   );
