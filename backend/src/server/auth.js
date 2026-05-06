@@ -7,7 +7,9 @@ const clerkClockSkewMs = Number(process.env.CLERK_CLOCK_SKEW_IN_MS || 60_000);
 
 // Session JWT `azp` must match an authorized frontend origin (comma-separated).
 const clerkAuthorizedParties = (() => {
-  const raw = process.env.CLERK_AUTHORIZED_PARTIES || "http://localhost:5173";
+  const raw =
+    process.env.CLERK_AUTHORIZED_PARTIES ||
+    "http://localhost:5173,https://attendance-management-frontend-lime.vercel.app";
   const list = raw
     .split(",")
     .map((s) => s.trim())

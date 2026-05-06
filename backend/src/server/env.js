@@ -7,7 +7,9 @@ function requireEnv(key) {
 }
 
 function getCorsOrigins() {
-  const raw = process.env.CORS_ORIGINS || "http://localhost:5173";
+  const raw =
+    process.env.CORS_ORIGINS ||
+    "http://localhost:5173,https://attendance-management-frontend-lime.vercel.app";
   return raw
     .split(",")
     .map((s) => s.trim())
