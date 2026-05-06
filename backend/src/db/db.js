@@ -86,6 +86,14 @@ const institutions = {
     return r.rows[0];
   },
 
+  async createWithId({ id, name }) {
+    const r = await query(
+      "insert into institutions (id, name) values ($1, $2) returning id, name, created_at",
+      [id, name]
+    );
+    return r.rows[0];
+  },
+
   async getById(id) {
     const r = await query("select id, name, created_at from institutions where id = $1", [
       id,

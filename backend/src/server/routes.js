@@ -200,8 +200,21 @@ function registerRoutes(app) {
         );
       }
 
-      const inst = await db.institutions.getById(institutionId);
-      if (!inst) throw httpError(400, "Institution not found");
+      let inst = await db.institutions.getById(institutionId);
+      if (!inst) {
+        // Trainer pasted a custom organisation UUID that isn't in our DB yet.
+        // Create a placeholder institution row so batches can be created under it.
+        // This keeps the default flow unchanged (trainers still auto-attach to the demo org),
+        // while allowing future "paste organisation link" scenarios.
+        if (req.user.role === "Trainer" && input.institutionId) {
+          inst = await db.institutions.createWithId({
+            id: institutionId,
+            name: "Imported organisation",
+          });
+        } else {
+          throw httpError(400, "Institution not found");
+        }
+      }
 
       const batch = await db.batches.create({ name: input.name, institutionId });
 
