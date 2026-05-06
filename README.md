@@ -4,9 +4,9 @@ End-to-end prototype for a fictional state-level skilling programme called **Ski
 **Student**, **Trainer**, **Institution**, **Programme Manager**, **Monitoring Officer**.
 
 ## Live URLs
-- **Frontend**: _add after deploy_
-- **Backend**:  _add after deploy_
-- **API base URL**: same host as backend (`/health` for a quick check)
+- **Frontend**: https://attendance-management-frontend-lime.vercel.app/
+- **Backend**:  https://attendance-management-1j1x.onrender.com/
+- **API base URL**: [same host as backend](https://attendance-management-1j1x.onrender.com/health?format=json) (`/health` for a quick check)
 
 > Until deployed, run locally — see [Local setup](#local-setup) below. Local runs cover every flow described in the spec.
 
