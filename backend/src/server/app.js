@@ -3,15 +3,19 @@ const express = require("express");
 const cors = require("cors");
 const { ZodError } = require("zod");
 
-const { getCorsOrigins } = require("./env");
+const { getCorsOrigins, isAllowedCorsOrigin } = require("./env");
 const { registerRoutes } = require("./routes");
 
 function createApp() {
   const app = express();
+  const corsOrigins = getCorsOrigins();
 
   app.use(
     cors({
-      origin: getCorsOrigins(),
+      origin: (origin, cb) => {
+        if (isAllowedCorsOrigin(origin, corsOrigins)) return cb(null, true);
+        return cb(new Error(`CORS blocked for origin: ${origin}`));
+      },
       credentials: true,
     })
   );

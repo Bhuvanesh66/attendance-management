@@ -16,5 +16,20 @@ function getCorsOrigins() {
     .filter(Boolean);
 }
 
-module.exports = { requireEnv, getCorsOrigins };
+function isAllowedCorsOrigin(origin, allowList) {
+  if (!origin) return true; // non-browser clients (curl, server-to-server)
+
+  // Allow any Vercel deployment URL by default (preview + prod).
+  // This prevents constant CORS breakage when Vercel generates a new domain.
+  try {
+    const u = new URL(origin);
+    if (u.hostname.endsWith(".vercel.app")) return true;
+  } catch (_) {
+    // ignore parse errors; fall back to allowList check
+  }
+
+  return allowList.includes(origin);
+}
+
+module.exports = { requireEnv, getCorsOrigins, isAllowedCorsOrigin };
 
