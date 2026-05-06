@@ -77,6 +77,13 @@ function createApp() {
     const pgCode = err?.code;
     const devHint =
       process.env.NODE_ENV !== "production" ? String(err?.message || "") : undefined;
+    if (pgCode === "42P01") {
+      return res.status(500).json({
+        error: "Database tables not found (migrations not applied).",
+        hint: "Run migrations for the backend database (npm run migrate -w backend). On Render, run it once or set your Start Command to run migrate before start.",
+        detail: devHint || undefined,
+      });
+    }
     if (pgCode === "22P02") {
       return res.status(400).json({
         error:
