@@ -4,6 +4,7 @@
   "type": "commonjs",
   "main": "src/index.js",
   "scripts": {
+    "build": "node -e \"console.log('backend: no build step')\"",
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "migrate": "node src/db/migrate.js",
